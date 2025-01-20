@@ -4,85 +4,108 @@ import core from "@actions/core";
 const navigationTimeout = 120000; // Set the navigation timeout to 120 seconds (120,000 milliseconds)
 
 function arrayToHTMLList(array) {
-  let html = "<ul>";
+	let html = "<ul>";
 
-  for (let i = 0; i < array.length; i++) {
-    html += "<li>" + array[i] + "</li>";
-  }
+	for (let i = 0; i < array.length; i++) {
+		html += "<li>" + array[i] + "</li>";
+	}
 
-  html += "</ul>";
+	html += "</ul>";
 
-  return html;
+	return html;
 }
 
 async function checkLinks() {
-  const browser = await puppeteer.launch({
-    headless: "new",
-  });
-  const page = await browser.newPage();
+	const browser = await puppeteer.launch({
+		headless: "new",
+	});
+	const page = await browser.newPage();
 
-  const sitemapUrl = "https://developers.cloudflare.com/sitemap.xml";
-  await page.goto(sitemapUrl, { timeout: navigationTimeout });
+	// skip image requests
+	await page.setRequestInterception(true);
+	page.on("request", (request) => {
+		if (request.resourceType() === "image") request.abort();
+		else request.continue();
+	});
 
-  const sitemapLinks = await page.$$eval("url loc", (elements) =>
-    elements.map((el) => el.textContent)
-  );
+	const sitemapUrl = "https://developers.cloudflare.com/sitemap-0.xml";
+	await page.goto(sitemapUrl, { timeout: navigationTimeout });
 
-  const visitedLinks = [];
-  const brokenLinks = [];
+	const sitemapLinks = await page.$$eval("url loc", (elements) =>
+		elements.map((el) => el.textContent),
+	);
 
-  for (const link of sitemapLinks) {
-    if (!link) {
-      continue; // Skip if the link is empty
-    }
+	const visitedLinks = [];
+	const brokenLinks = [];
 
-    await page.goto(link, {
-      waitUntil: "networkidle0",
-      timeout: navigationTimeout,
-    });
+	for (const link of sitemapLinks) {
+		if (!link) {
+			continue; // Skip if the link is empty
+		}
 
-    const pageLinks = await page.$$eval("a", (elements) =>
-      elements.map((el) => el.href)
-    );
+		try {
+			await page.goto(link, {
+				waitUntil: "networkidle0",
+				timeout: navigationTimeout,
+			});
+		} catch (e) {
+			console.log(
+				`  WARNING: Error loading Dev Docs page: ${e.message}... Skipping.`,
+			);
+			continue;
+		}
 
-    for (const pageLink of pageLinks) {
-      if (!pageLink || visitedLinks.includes(pageLink)) {
-        continue; // Skip if the pageLink is empty or has already been visited
-      }
+		const pageLinks = await page.$$eval("a", (elements) =>
+			elements.map((el) => el.href),
+		);
 
-      if (
-        pageLink.includes("developers.cloudflare.com/api/operations/") ||
-        pageLink.startsWith("/api/operations/")
-      ) {
-        console.log(`Evaluating link: ${pageLink}`);
-        await page.goto(pageLink, {
-          waitUntil: "networkidle0",
-          timeout: navigationTimeout,
-        });
-        visitedLinks.push(pageLink);
+		for (const pageLink of pageLinks) {
+			if (!pageLink || visitedLinks.includes(pageLink)) {
+				continue; // Skip if the pageLink is empty or has already been visited
+			}
 
-        const statusCode = await page.evaluate(() => {
-          return {
-            url: window.location.href,
-          };
-        });
-        if (statusCode.url === "https://developers.cloudflare.com/api/") {
-          brokenLinks.push(pageLink);
-        }
-      }
-    }
-  }
+			if (
+				pageLink.includes("developers.cloudflare.com/api/resources/") ||
+				pageLink.startsWith("/api/resources/")
+			) {
+				console.log(`Evaluating link: ${pageLink}`);
 
-  await browser.close();
-  console.log("Broken links:");
-  console.log(brokenLinks);
-  if (brokenLinks.length > 0) {
-    core.setOutput("brokenLinks", arrayToHTMLList(brokenLinks));
-  }
-  process.exit(0);
+				let response = null;
+
+				try {
+					response = await page.goto(pageLink, {
+						waitUntil: "networkidle0",
+						timeout: navigationTimeout,
+					});
+					visitedLinks.push(pageLink);
+				} catch (e) {
+					console.log(
+						`  WARNING: Error loading API page: ${e.message}... Skipping.`,
+					);
+					continue;
+				}
+
+				if (response) {
+					if (response.status() === 404) {
+						brokenLinks.push(pageLink);
+					}
+				} else {
+					console.log("  WARNING: Didn't receive a response... skipping.");
+				}
+			}
+		}
+	}
+
+	await browser.close();
+	console.log("Broken links:");
+	console.log(brokenLinks);
+	if (brokenLinks.length > 0) {
+		core.setOutput("brokenLinks", arrayToHTMLList(brokenLinks));
+	}
+	process.exit(0);
 }
 
 checkLinks().catch((error) => {
-  console.error(error);
-  process.exit(1);
+	console.error(error);
+	process.exit(1);
 });
