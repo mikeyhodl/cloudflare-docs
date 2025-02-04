@@ -1,9 +1,7 @@
-DirectoryPath: "public"
+DirectoryPath: "dist"
 EnforceHTTPS: false
 IgnoreURLs:
-- "/api/*"
-IgnoreDirs:
-- "support/other-languages/"
+  - "/api/*"
 CheckLinks: true
 CheckImages: false
 CheckScripts: false
